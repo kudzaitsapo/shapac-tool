@@ -2,6 +2,9 @@ import { useState, useEffect } from "react";
 import { useConnections } from "../hooks/useConnections";
 import { useSqlPackage } from "../hooks/useSqlPackage";
 import { listen } from "@tauri-apps/api/event";
+import { tempDir, sep } from "@tauri-apps/api/path";
+import { api } from "../utils/api";
+import type { ExportRequest } from "../types";
 
 interface ImportDialogProps {
   isOpen: boolean;
@@ -88,17 +91,23 @@ export function ImportDialog({ isOpen, onClose }: ImportDialogProps) {
     }
   }, [progress]);
 
-  // Listen for real-time import progress events
+  // Listen for real-time import and export progress events
   useEffect(() => {
     if (!isOpen) return;
 
-    const unlisten = listen<string>("import-progress", (event) => {
+    const unlistenImport = listen<string>("import-progress", (event) => {
+      setOutputMessages((prev) => [...prev, event.payload]);
+      setShowOutput(true);
+    });
+
+    const unlistenExport = listen<string>("export-progress", (event) => {
       setOutputMessages((prev) => [...prev, event.payload]);
       setShowOutput(true);
     });
 
     return () => {
-      unlisten.then((fn) => fn());
+      unlistenImport.then((fn) => fn());
+      unlistenExport.then((fn) => fn());
     };
   }, [isOpen]);
 
@@ -193,7 +202,58 @@ export function ImportDialog({ isOpen, onClose }: ImportDialogProps) {
           );
         }
       } else if (sourceType === "connection" && sourceConnectionId) {
-        await importBacpac(sourceConnectionId as number, targetDatabase);
+        // Export from source connection to temp file, then import to target
+        setOutputMessages((prev) => [...prev, "Step 1/2: Exporting from source connection..."]);
+
+        // Get the source connection details
+        const sourceConnection = connections.find(c => c.id === sourceConnectionId);
+        if (!sourceConnection) {
+          throw new Error("Source connection not found");
+        }
+
+        // Create a temporary file path for the BACPAC export
+        const tempDirPath = await tempDir();
+        const pathSep = sep();
+        const timestamp = new Date().getTime();
+        const databaseName = sourceConnection.database_name || "database";
+        const tempBacpacPath = `${tempDirPath}${pathSep}temp_export_${timestamp}_${databaseName}.bacpac`;
+
+        setOutputMessages((prev) => [...prev, `Exporting from ${sourceConnection.name} to temporary file...`]);
+
+        // Export from source connection to temp file
+        const exportRequest: ExportRequest = {
+          connection_id: sourceConnectionId,
+          output_path: tempBacpacPath,
+          database_name: sourceConnection.database_name || "",
+        };
+
+        await api.exportBacpac(exportRequest);
+
+        setOutputMessages((prev) => [...prev, "✓ Export completed successfully"]);
+        setOutputMessages((prev) => [...prev, "Step 2/2: Importing to target database..."]);
+
+        // Import the temp BACPAC file to the target using server details
+        if (targetType === "details") {
+          await importBacpacWithDetails(
+            tempBacpacPath,
+            targetDatabase,
+            targetServer,
+            targetPort,
+            targetUsername,
+            targetPassword,
+            targetUseWindowsAuth,
+            targetEncrypt,
+            targetTrustServerCert,
+          );
+        } else {
+          // targetType is "connection_string"
+          alert(
+            "Import with connection string target not yet implemented in backend API",
+          );
+        }
+
+        // Note: We're leaving the temp file for the OS to clean up
+        // Alternatively, we could delete it here using Tauri's fs API
       } else {
         // Handle custom connection string scenario
         // This would require backend API updates

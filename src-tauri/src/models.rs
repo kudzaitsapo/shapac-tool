@@ -44,13 +44,6 @@ pub struct ImportWithDetailsRequest {
     pub encrypt: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct OperationProgress {
-    pub status: String,
-    pub message: String,
-    pub progress: Option<u32>,
-}
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppPreference {
     pub key: String,
